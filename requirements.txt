@@ -1,0 +1,5 @@
+streamlit
+pandas
+Pillow
+pytest
+# Optional: python-dotenv  (to load PHARMACY_ADMIN_USER/PASS from a .env file)

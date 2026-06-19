@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# SQLite database (contains user data — do not commit)
+drug_data.db
+
+# Environment variables (contains secrets)
+.env
+
+# Streamlit
+.streamlit/
+
+# Pytest cache
+.pytest_cache/
+.cache/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

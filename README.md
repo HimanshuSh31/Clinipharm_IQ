@@ -1,12 +1,27 @@
 # 💊 Pharmacy Management System
 
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://pharmacymanagementsystem-himanshush31.streamlit.app)
 ![Python](https://img.shields.io/badge/Python-3.11+-blue?logo=python&logoColor=white)
 ![Streamlit](https://img.shields.io/badge/Streamlit-1.x-red?logo=streamlit&logoColor=white)
 ![SQLite](https://img.shields.io/badge/SQLite-3-lightblue?logo=sqlite&logoColor=white)
-![Tests](https://img.shields.io/badge/Tests-62%20passed-brightgreen?logo=pytest&logoColor=white)
+![Tests](https://img.shields.io/badge/Tests-73%20passed-brightgreen?logo=pytest&logoColor=white)
+![CI](https://github.com/HimanshuSh31/Pharmacy_Management_System/actions/workflows/ci.yml/badge.svg)
 ![License](https://img.shields.io/badge/License-Educational-orange)
 
 A full-featured pharmacy management web application built with **Python** and **Streamlit**, backed by **SQLite**. Supports separate Admin and Customer portals with secure authentication, inventory management, and order tracking.
+
+---
+
+## 🚀 Live Demo
+
+**[▶ Open Live Demo](https://pharmacymanagementsystem-himanshush31.streamlit.app)**
+
+| Role | Username / Email | Password |
+|---|---|---|
+| 🛡️ Admin | `admin` | `Demo@2024` |
+| 🛒 Customer | `demo@pharma.com` | `Demo@2024` |
+
+> The demo database resets when the app is redeployed. All data you enter is for demonstration only.
 
 ---
 
@@ -14,28 +29,40 @@ A full-featured pharmacy management web application built with **Python** and **
 
 ### 🔐 Authentication & Security
 - PBKDF2-HMAC-SHA256 password hashing (260,000 iterations, unique 16-byte salt per password)
-- Admin credentials loaded from environment variables — never hardcoded in source
-- Email and phone number validation on sign-up
+- Admin credentials via environment variables / Streamlit secrets — never hardcoded
+- Login rate limiting: locked for 5 minutes after 5 failed attempts
+- Session timeout: auto-logout after 60 minutes of inactivity
+- Password strength enforcement on sign-up
 
 ### 🛡️ Admin Portal
-- **Drug Inventory** — Add, view, update, and delete drugs with price and image support
-- **Low-Stock Alerts** — Banner warning when any drug falls at or below 10 units; low-stock rows highlighted red
-- **Inventory Search** — Filter drugs by name or ID instantly
-- **Customer Management** — View, update, and delete customer accounts
-- **Order Management** — View all orders with line totals and per-customer summaries; delete orders
+- **5 live metric cards** — Total Drugs, Low Stock, Customers, Orders, Revenue
+- **Drug Inventory** — Add, view, update, delete with category, supplier, prescription flag
+- **Image upload** — Upload drug photos directly from the browser
+- **Bulk CSV Import** — Import hundreds of drugs at once with template download
+- **Paginated drug list** — 20 drugs per page with search + category filter
+- **Low-stock alerts** — Red banner + optional email notification (SMTP)
+- **Expiry highlighting** — Red = expired · Orange = ≤30 days · Yellow = low stock
+- **Customer Management** — View, search, update, delete accounts
+- **Order Management** — Full order history with revenue by customer; CSV export
+- **Cache layer** — `@st.cache_data` (30–120s TTL) with write-through invalidation
 
 ### 🛒 Customer Portal
-- Browse available medicines with prices, expiry dates, and live stock levels
-- Quantity sliders with real-time order total preview before confirming
-- Atomic order placement — stock is decremented in the same transaction; full rollback on any failure
-- Order history with per-order totals
+- Browse medicines in a **3-column card grid** with category + prescription badges
+- **Medicine search** and **category filter** dropdown
+- Expired drugs shown as blocked cards (cannot be ordered)
+- Expiring-soon warning badge (≤30 days)
+- Quantity sliders with real-time per-item subtotal
+- **Order confirmation step** — review full summary + total before placing
+- Order history with per-order totals and CSV download
+- **Customer profile sidebar** — view and update phone number
 
 ### 🗄️ Database
-- **Normalised schema** — `OrderItems` join table replaces fragile comma-string order storage
-- **Atomic transactions** — every multi-step write rolls back completely on failure
-- **Foreign key enforcement** — `PRAGMA foreign_keys = ON` on every connection
-- **Check constraints** — `D_Qty >= 0` prevents negative stock at the DB level
-- **Auto-migration** — `_run_migrations()` safely adds new columns to existing databases on startup with no data loss
+- **Normalised schema** — `OrderItems` join table
+- **Atomic transactions** — full rollback on any failure
+- **Foreign key enforcement** — `PRAGMA foreign_keys = ON`
+- **Check constraints** — `D_Qty >= 0` prevents negative stock
+- **Auto-migration** — `_run_migrations()` safely adds new columns on startup
+- **New columns** — `D_Category`, `D_Supplier`, `D_Prescription`
 
 ---
 
@@ -48,7 +75,11 @@ A full-featured pharmacy management web application built with **Python** and **
 | Data display | [Pandas](https://pandas.pydata.org/) |
 | Image handling | [Pillow](https://python-pillow.org/) |
 | Password hashing | `hashlib` PBKDF2-HMAC-SHA256 (Python stdlib) |
+| Email alerts | `smtplib` (Python stdlib) |
+| Caching | `@st.cache_data` (Streamlit) |
 | Testing | [pytest](https://pytest.org/) |
+| CI | GitHub Actions |
+| Deploy | Streamlit Community Cloud / Docker |
 
 ---
 
@@ -57,122 +88,102 @@ A full-featured pharmacy management web application built with **Python** and **
 ```
 Pharmacy_Management_System/
 │
-├── main.py              # App entry point — routing & session state
-├── database.py          # All SQLite CRUD operations & schema migrations
-├── auth.py              # Password hashing, validation & authentication
-├── admin_ui.py          # Admin dashboard UI
-├── customer_ui.py       # Customer-facing UI
+├── main.py              # Entry point — routing, session, auth screens
+├── database.py          # All SQLite CRUD, schema migrations, bulk import
+├── auth.py              # PBKDF2 hashing, validators, rate limiting helpers
+├── admin_ui.py          # Admin dashboard UI (metrics, CRUD, import, alerts)
+├── customer_ui.py       # Customer-facing UI (card grid, order flow)
+├── data.py              # @st.cache_data read layer with invalidators
+├── notifier.py          # SMTP low-stock email alerts
+├── demo_data.py         # Seeds 10 demo drugs + 1 demo customer on first run
+├── styles.py            # Master CSS + HTML component helpers
 │
 ├── drug_data.db         # SQLite database (auto-created on first run)
-├── drugdatabase.sql     # Schema reference (valid SQLite SQL + useful views)
+├── drugdatabase.sql     # Schema reference with SQL views
 │
-├── images/              # Drug images (referenced by D_Image column)
-│   ├── dolo650.jpg
-│   ├── strepsils.jpg
-│   └── vicks.jpg
+├── images/              # Drug images (uploaded via admin UI)
 │
 ├── tests/
-│   ├── conftest.py      # pytest fixtures — isolated in-memory DB per test
-│   ├── test_database.py # 37 CRUD & transaction tests
-│   └── test_auth.py     # 25 auth, hashing & validation tests
+│   ├── conftest.py      # pytest fixtures — isolated in-memory DB
+│   ├── test_database.py # 40 CRUD & transaction tests
+│   └── test_auth.py     # 33 auth, hashing & validation tests
 │
+├── .streamlit/
+│   ├── config.toml           # Premium color theme
+│   └── secrets.toml.example  # Secrets template for Streamlit Cloud
+│
+├── .github/workflows/ci.yml  # GitHub Actions: pytest on every push/PR
+├── Dockerfile                # Production Docker image
+├── docker-compose.yml        # One-command deploy
 ├── requirements.txt
 ├── pytest.ini
-├── .env.example         # Template for admin credential env vars
-└── README.md
+└── .env.example         # Environment variable template
 ```
 
 ---
 
 ## 🚀 Getting Started
 
-### 1. Clone the repository
+### Option 1 — Streamlit Community Cloud (Recommended)
+
+1. Fork this repository
+2. Go to **[share.streamlit.io](https://share.streamlit.io)** and sign in with GitHub
+3. Click **New app** → select your fork → set main file to `main.py`
+4. Under **Advanced settings → Secrets**, paste:
+   ```toml
+   PHARMACY_ADMIN_USER = "admin"
+   PHARMACY_ADMIN_PASS = "YourSecurePassword"
+   ```
+5. Click **Deploy** — live in ~60 seconds ✅
+
+### Option 2 — Docker (One command)
 
 ```bash
 git clone https://github.com/HimanshuSh31/Pharmacy_Management_System.git
 cd Pharmacy_Management_System
+cp .env.example .env          # edit credentials
+docker compose up --build
 ```
+Open **[http://localhost:8501](http://localhost:8501)**
 
-### 2. Create and activate a virtual environment
+### Option 3 — Local Python
 
 ```bash
+git clone https://github.com/HimanshuSh31/Pharmacy_Management_System.git
+cd Pharmacy_Management_System
 python -m venv .venv
-
-# Windows
-.venv\Scripts\activate
-
-# macOS / Linux
-source .venv/bin/activate
-```
-
-### 3. Install dependencies
-
-```bash
+.venv\Scripts\activate        # Windows
+# source .venv/bin/activate   # macOS/Linux
 pip install -r requirements.txt
-```
-
-### 4. Configure admin credentials *(optional but recommended)*
-
-Copy `.env.example` to `.env` and fill in your credentials:
-
-```bash
-# Windows
-copy .env.example .env
-
-# macOS / Linux
-cp .env.example .env
-```
-
-```ini
-PHARMACY_ADMIN_USER=your_admin_username
-PHARMACY_ADMIN_PASS=your_secure_password
-```
-
-> If these are not set, the app falls back to `admin` / `admin` and logs a warning at startup.
-
-### 5. Run the app
-
-```bash
+cp .env.example .env          # edit credentials
 streamlit run main.py
 ```
 
-Open **[http://localhost:8501](http://localhost:8501)** in your browser.
-
 ---
 
-## 🧑‍💼 Default Credentials
+## 🧑‍💼 Default Demo Credentials
 
-| Role | Username | Password |
+| Role | Username / Email | Password |
 |---|---|---|
-| Admin | `admin` | `admin` |
-| Customer | *(register via Sign Up)* | — |
+| 🛡️ Admin | `admin` | `Demo@2024` |
+| 🛒 Customer | `demo@pharma.com` | `Demo@2024` |
 
-> ⚠️ Change the admin password via environment variables before deploying.
+> Change admin credentials via the `.env` file or Streamlit Cloud secrets.
 
 ---
 
 ## 🧪 Running Tests
 
 ```bash
-# Windows
-python -m pytest tests\ -v
-
-# macOS / Linux
 python -m pytest tests/ -v
 ```
 
-The test suite runs **62 tests** against a fresh in-memory SQLite database — no running Streamlit server required.
-
-```
-62 passed in ~2.5s  ✅
-```
-
-### What's tested
+**73 tests · ~2.5s · in-memory SQLite · no Streamlit server required**
 
 | File | Tests | Coverage |
 |---|---|---|
-| `test_database.py` | 37 | All CRUD, atomic order placement, rollback on failure, CASCADE delete, low-stock query |
-| `test_auth.py` | 25 | Password hashing uniqueness, correct/wrong/malformed verify, email & phone validators, customer auth |
+| `test_database.py` | 40 | CRUD, atomic orders, rollback, CASCADE, low-stock, bulk import |
+| `test_auth.py` | 33 | Password hashing, strength, email/phone validators, rate limiting |
 
 ---
 
@@ -180,20 +191,12 @@ The test suite runs **62 tests** against a fresh in-memory SQLite database — n
 
 ```sql
 Customers  (C_Email PK, C_Name, C_Password, C_State, C_Number)
-Drugs      (D_id PK, D_Name, D_ExpDate, D_Use, D_Qty >= 0, D_Price, D_Image)
-Orders     (O_id PK, O_Name, O_Timestamp)
-OrderItems (OI_id PK, O_id FK→Orders, D_id FK→Drugs,
-            D_name, quantity > 0, unit_price)
+Drugs      (D_id PK, D_Name, D_ExpDate, D_Use, D_Qty >= 0,
+            D_Price, D_Image, D_Category, D_Supplier, D_Prescription)
+Orders     (O_id PK, O_Name, O_Timestamp, C_Email FK→Customers)
+OrderItems (OI_id PK, O_id FK→Orders CASCADE,
+            D_id FK→Drugs, D_name, quantity > 0, unit_price)
 ```
-
-- Deleting an `Orders` row cascades to all its `OrderItems`
-- The full schema with SQL views is in [`drugdatabase.sql`](drugdatabase.sql)
-
----
-
-## 📸 Drug Images
-
-Place image files inside the `images/` folder. When adding a drug in the Admin portal, enter the filename (e.g. `aspirin.jpg`) in the **Image filename** field. That image will then be displayed in the customer medicine catalogue.
 
 ---
 
@@ -202,10 +205,25 @@ Place image files inside the `images/` folder. When adding a drug in the Admin p
 | Concern | Approach |
 |---|---|
 | Password storage | PBKDF2-HMAC-SHA256, unique random salt per password |
-| Admin credentials | Environment variables (`PHARMACY_ADMIN_USER`, `PHARMACY_ADMIN_PASS`) |
-| SQL injection | Parameterised queries throughout (`?` placeholders) |
-| Negative stock | `CHECK(D_Qty >= 0)` DB constraint + app-level guard in `order_place()` |
-| Partial orders | Full transaction rollback if any item in an order fails |
+| Admin credentials | Environment variables / Streamlit Cloud secrets |
+| SQL injection | Parameterised queries (`?` placeholders) throughout |
+| Negative stock | `CHECK(D_Qty >= 0)` + app-level guard in `order_place()` |
+| Brute force | 5-attempt lockout with 5-minute cooldown |
+| Session hijack | 60-minute idle timeout |
+
+---
+
+## 📧 Low-Stock Email Alerts
+
+Set these in `.env` or Streamlit Cloud secrets to enable the **📧 Email Alert** button:
+
+```ini
+SMTP_HOST   = smtp.gmail.com
+SMTP_PORT   = 587
+SMTP_USER   = you@gmail.com
+SMTP_PASS   = your-16-char-app-password   # Gmail App Password
+ALERT_EMAIL = admin@yourpharmacy.com
+```
 
 ---
 

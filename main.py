@@ -7,6 +7,8 @@ Round-3 improvements:
   - Login rate limiting: lock after 5 failed attempts for 5 minutes
   - Session timeout: auto-logout after 60 minutes of inactivity
   - Customer profile sidebar section
+  - Streamlit Cloud secrets fallback (st.secrets → env vars)
+  - Demo data seeding on first startup
 """
 
 import logging
@@ -23,6 +25,17 @@ except ImportError:
 
 import streamlit as st
 
+# Inject Streamlit Cloud secrets into os.environ so auth.py picks them up
+# (Streamlit Cloud exposes secrets via st.secrets; locally we use .env)
+try:
+    for _key in ("PHARMACY_ADMIN_USER", "PHARMACY_ADMIN_PASS",
+                 "SMTP_HOST", "SMTP_PORT", "SMTP_USER",
+                 "SMTP_PASS", "ALERT_EMAIL", "LOG_LEVEL"):
+        if _key in st.secrets and _key not in os.environ:
+            os.environ[_key] = str(st.secrets[_key])
+except Exception:
+    pass   # st.secrets not available (local dev without secrets.toml)
+
 from database import create_all_tables, customer_get_by_email, customer_update
 from auth import (
     authenticate_customer, authenticate_admin,
@@ -30,6 +43,7 @@ from auth import (
     validate_password_strength,
 )
 from database import customer_add_data
+from demo_data import seed_demo_data
 from admin_ui import show_admin_dashboard
 from customer_ui import show_customer_dashboard
 from styles import inject_css, sidebar_logo
@@ -319,6 +333,7 @@ def main() -> None:
 
     if not st.session_state.tables_ok:
         create_all_tables()
+        seed_demo_data()          # no-op if DB already has data
         st.session_state.tables_ok = True
 
     if st.session_state.logged_in:

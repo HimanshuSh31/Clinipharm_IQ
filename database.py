@@ -83,13 +83,16 @@ def create_all_tables() -> None:
 
     conn.execute('''
         CREATE TABLE IF NOT EXISTS Drugs (
-            D_Name    VARCHAR(50)  NOT NULL,
-            D_ExpDate DATE         NOT NULL,
-            D_Use     VARCHAR(200) NOT NULL,
-            D_Qty     INT          NOT NULL CHECK(D_Qty >= 0),
-            D_id      VARCHAR(50)  PRIMARY KEY NOT NULL,
-            D_Price   REAL         NOT NULL DEFAULT 0.0,
-            D_Image   TEXT         DEFAULT NULL
+            D_Name         VARCHAR(50)  NOT NULL,
+            D_ExpDate      DATE         NOT NULL,
+            D_Use          VARCHAR(200) NOT NULL,
+            D_Qty          INT          NOT NULL CHECK(D_Qty >= 0),
+            D_id           VARCHAR(50)  PRIMARY KEY NOT NULL,
+            D_Price        REAL         NOT NULL DEFAULT 0.0,
+            D_Image        TEXT         DEFAULT NULL,
+            D_Category     TEXT         NOT NULL DEFAULT 'General',
+            D_Supplier     TEXT         NOT NULL DEFAULT '',
+            D_Prescription INTEGER      NOT NULL DEFAULT 0
         )
     ''')
 
@@ -132,14 +135,24 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
     drug_cols = {row[1] for row in c.fetchall()}
 
     if "D_Price" not in drug_cols:
-        # SQLite ALTER TABLE: column must be nullable OR have a constant default.
-        # Using a plain literal 0.0 satisfies this.
         conn.execute("ALTER TABLE Drugs ADD COLUMN D_Price REAL DEFAULT 0.0")
         logger.info("Migration: added D_Price to Drugs")
 
     if "D_Image" not in drug_cols:
         conn.execute("ALTER TABLE Drugs ADD COLUMN D_Image TEXT DEFAULT NULL")
         logger.info("Migration: added D_Image to Drugs")
+
+    if "D_Category" not in drug_cols:
+        conn.execute("ALTER TABLE Drugs ADD COLUMN D_Category TEXT DEFAULT 'General'")
+        logger.info("Migration: added D_Category to Drugs")
+
+    if "D_Supplier" not in drug_cols:
+        conn.execute("ALTER TABLE Drugs ADD COLUMN D_Supplier TEXT DEFAULT ''")
+        logger.info("Migration: added D_Supplier to Drugs")
+
+    if "D_Prescription" not in drug_cols:
+        conn.execute("ALTER TABLE Drugs ADD COLUMN D_Prescription INTEGER DEFAULT 0")
+        logger.info("Migration: added D_Prescription to Drugs")
 
     # --- Orders migrations ---
     c.execute("PRAGMA table_info(Orders)")
@@ -274,15 +287,19 @@ def customer_delete(email: str) -> Tuple[bool, str]:
 # ---------------------------------------------------------------------------
 
 def drug_add_data(name: str, expdate: str, use: str, qty: int, drug_id: str,
-                  price: float = 0.0, image: Optional[str] = None) -> bool:
+                  price: float = 0.0, image: Optional[str] = None,
+                  category: str = "General", supplier: str = "",
+                  prescription: int = 0) -> bool:
     """Insert a new drug. Returns False if the drug ID already exists."""
     conn = get_connection()
     try:
         conn.execute(
             'INSERT INTO Drugs '
-            '(D_Name, D_ExpDate, D_Use, D_Qty, D_id, D_Price, D_Image) '
-            'VALUES (?,?,?,?,?,?,?)',
-            (name, expdate, use, qty, drug_id, price, image)
+            '(D_Name, D_ExpDate, D_Use, D_Qty, D_id, D_Price, D_Image,'
+            ' D_Category, D_Supplier, D_Prescription) '
+            'VALUES (?,?,?,?,?,?,?,?,?,?)',
+            (name, expdate, use, qty, drug_id, price, image,
+             category, supplier, prescription)
         )
         conn.commit()
         logger.info("Drug added: %s", drug_id)
@@ -396,16 +413,37 @@ def drug_delete(drug_id: str) -> Tuple[bool, str]:
         return False, f"Database error: {str(exc)}"
 
 
-def drug_update_details(drug_id: str, use: str, price: float, add_qty: int) -> bool:
+def drug_update_details(drug_id: str, use: str, price: float, add_qty: int,
+                        expdate: str = "", category: str = "",
+                        supplier: str = "", prescription: int = -1) -> bool:
     """
-    Update drug details (use, price, and add quantity to stock) atomically.
+    Update drug details atomically.
+    - add_qty is ADDED to existing stock (pass 0 to leave unchanged).
+    - expdate/category/supplier/prescription are only updated when non-empty / != -1.
     Returns True on success, False if drug not found or error.
     """
     conn = get_connection()
     try:
+        # Build dynamic SET clause for optional fields
+        sets   = ["D_Use = ?", "D_Price = ?", "D_Qty = D_Qty + ?"]
+        params: List = [use, price, add_qty]
+        if expdate:
+            sets.append("D_ExpDate = ?")
+            params.append(expdate)
+        if category:
+            sets.append("D_Category = ?")
+            params.append(category)
+        if supplier != "":
+            sets.append("D_Supplier = ?")
+            params.append(supplier)
+        if prescription != -1:
+            sets.append("D_Prescription = ?")
+            params.append(int(prescription))
+        params.append(drug_id)
+
         cur = conn.execute(
-            'UPDATE Drugs SET D_Use = ?, D_Price = ?, D_Qty = D_Qty + ? WHERE D_id = ?',
-            (use, price, add_qty, drug_id)
+            f'UPDATE Drugs SET {", ".join(sets)} WHERE D_id = ?',
+            params
         )
         if cur.rowcount == 0:
             logger.warning("drug_update_details: no drug with id=%s", drug_id)
@@ -417,6 +455,89 @@ def drug_update_details(drug_id: str, use: str, price: float, add_qty: int) -> b
         conn.rollback()
         logger.error("drug_update_details failed: %s", exc)
         return False
+
+
+def drug_update_expiry(drug_id: str, new_expdate: str) -> bool:
+    """Update expiry date for a drug. Returns False if not found."""
+    conn = get_connection()
+    try:
+        cur = conn.execute(
+            'UPDATE Drugs SET D_ExpDate = ? WHERE D_id = ?', (new_expdate, drug_id)
+        )
+        if cur.rowcount == 0:
+            return False
+        conn.commit()
+        logger.info("Drug expiry updated: %s -> %s", drug_id, new_expdate)
+        return True
+    except Exception as exc:
+        conn.rollback()
+        logger.error("drug_update_expiry failed: %s", exc)
+        return False
+
+
+def drug_get_categories() -> List[str]:
+    """Return sorted list of distinct drug categories."""
+    c = get_connection().cursor()
+    c.execute("SELECT DISTINCT D_Category FROM Drugs ORDER BY D_Category")
+    return [row[0] for row in c.fetchall() if row[0]]
+
+
+def drug_bulk_import(drugs: List[dict]) -> tuple:
+    """
+    Import multiple drugs from a list of dicts.
+    Expected keys per dict: id, name, expdate, use, qty, price,
+                            image, category, supplier, prescription
+    Returns (success_count, fail_count).
+    """
+    success, fail = 0, 0
+    for d in drugs:
+        ok = drug_add_data(
+            str(d.get("name", "")).strip(),
+            str(d.get("expdate", "")).strip(),
+            str(d.get("use", "")).strip(),
+            int(d.get("qty", 0)),
+            str(d.get("id", "")).strip(),
+            float(d.get("price", 0.0)),
+            d.get("image") or None,
+            str(d.get("category", "General")).strip(),
+            str(d.get("supplier", "")).strip(),
+            int(d.get("prescription", 0)),
+        )
+        if ok:
+            success += 1
+        else:
+            fail += 1
+    return success, fail
+
+
+def drug_view_paginated(limit: int = 20, offset: int = 0,
+                        search: str = "",
+                        category: str = "") -> tuple:
+    """
+    Return (rows, total_count) for paginated drug listing.
+    Filters by search (name or ID) and category if provided.
+    """
+    c = get_connection().cursor()
+    conditions: List[str] = []
+    params: List = []
+
+    if search:
+        conditions.append("(D_Name LIKE ? OR D_id LIKE ?)")
+        params.extend([f"%{search}%", f"%{search}%"])
+    if category and category.lower() not in ("", "all"):
+        conditions.append("D_Category = ?")
+        params.append(category)
+
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    c.execute(f"SELECT COUNT(*) FROM Drugs {where}", params)
+    total = c.fetchone()[0]
+
+    c.execute(
+        f"SELECT * FROM Drugs {where} ORDER BY D_Name LIMIT ? OFFSET ?",
+        params + [limit, offset]
+    )
+    return c.fetchall(), total
 
 
 # ---------------------------------------------------------------------------

@@ -12,13 +12,15 @@
 &nbsp;
 ![SQLite](https://img.shields.io/badge/SQLite-3-003B57?logo=sqlite&logoColor=white)
 &nbsp;
-![Tests](https://img.shields.io/badge/Tests-73%20passed-22C55E?logo=pytest&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15-4169E1?logo=postgresql&logoColor=white)
+&nbsp;
+![Tests](https://img.shields.io/badge/Tests-85%20passed-22C55E?logo=pytest&logoColor=white)
 &nbsp;
 ![License](https://img.shields.io/badge/License-Educational-F59E0B)
 
 <br/>
 
-A **full-featured, enterprise-grade** pharmacy management web application built with Python and Streamlit, backed by SQLite. Features separate Admin and Customer portals with secure authentication, real-time inventory tracking, order management, and bulk operations.
+A **full-featured, clinical-grade** pharmacy management web application built with Python and Streamlit, backed by SQLite / PostgreSQL. Features separate Admin and Customer portals with secure authentication, real-time inventory tracking, drug-drug contraindication alerts, prescription enforcers, one-click refills, interactive analytics, and regulatory audit logs.
 
 [**▶ Open Live Demo**](https://pharmacymanagementsystem.streamlit.app/) · [Report Bug](https://github.com/HimanshuSh31/Pharmacy_Management_System/issues) · [Request Feature](https://github.com/HimanshuSh31/Pharmacy_Management_System/issues)
 
@@ -57,6 +59,10 @@ The demo is pre-loaded with **10 realistic drugs** across 6 categories, includin
 | **Low-Stock Email Alert** | One-click email to admin (requires SMTP config in `.env`) |
 | **Customer Management** | View, search, update phone, delete customer accounts |
 | **Order Management** | Full order history, revenue by customer, CSV export on all tables |
+| **Fulfillment Stepper** | Admin order stage tracker (`Pending Verification` ➔ `Preparing` ➔ `Dispatched` ➔ `Delivered`) |
+| **Rx Verification Queue** | Pharmacist prescription inspection queue; click to approve or reject with reasons |
+| **Interactive Analytics** | Cumulative revenue, status breakdown, category value, and top drug charts |
+| **Regulatory Audit Logs** | Read-only compliant logs tracking all admin actions, searchable, filterable + CSV export |
 | **Cache Layer** | `@st.cache_data` (30–120 s TTL) with write-through invalidation |
 
 ### 🛒 Customer Portal
@@ -70,6 +76,10 @@ The demo is pre-loaded with **10 realistic drugs** across 6 categories, includin
 | **Expiring Soon** | ⏰ Warning badge on cards expiring within 30 days |
 | **Out of Stock** | Clearly marked, slider disabled |
 | **Live Subtotals** | Real-time `qty × price` shown below each slider |
+| **Rx Upload Enforcer** | Cart blocks checkout if Rx required until a digital prescription file is uploaded |
+| **Clinical Alerts** | Dynamic alerts warning customers of mutually contra-indicated categories (e.g., Antibiotics + Supplements) |
+| **Visual Order Tracker** | Expandable cards with a clear progress badge displaying order fulfillment stages |
+| **One-Click Refills** | Instantly re-request successful past orders; handles stock safety checks, auto-prescriptions, and expired prescription warnings |
 | **Order Confirmation** | Review full summary + grand total before confirming |
 | **Order History** | Per-order totals table + CSV download |
 | **Profile Sidebar** | View name/email/state/phone, update phone number |
@@ -93,14 +103,14 @@ The demo is pre-loaded with **10 realistic drugs** across 6 categories, includin
 | Layer | Technology |
 |---|---|
 | Frontend / UI | [Streamlit](https://streamlit.io/) |
-| Database | SQLite 3 (Python stdlib) — WAL mode, FK enforcement |
+| Database | SQLite 3 (WAL mode, FK) & PostgreSQL 15 (high concurrency) |
 | Data Tables | [Pandas](https://pandas.pydata.org/) |
 | Image Handling | [Pillow](https://python-pillow.org/) |
 | Password Hashing | `hashlib` PBKDF2-HMAC-SHA256 (Python stdlib) |
 | Email Alerts | `smtplib` STARTTLS (Python stdlib) |
 | Caching | `@st.cache_data` (Streamlit) |
 | Env Config | `python-dotenv` |
-| Testing | [pytest](https://pytest.org/) 73 tests |
+| Testing | [pytest](https://pytest.org/) 85 tests |
 | CI/CD | GitHub Actions |
 | Containerisation | Docker + Docker Compose |
 | Cloud Deploy | Streamlit Community Cloud |
@@ -124,12 +134,14 @@ Pharmacy_Management_System/
 │
 ├── drug_data.db         # SQLite database (auto-created on first run)
 ├── drugdatabase.sql     # Schema reference
-├── images/              # Drug images uploaded via admin UI
+├── images/              # Drug images uploaded via admin UI + prescriptions/
 │
 ├── tests/
 │   ├── conftest.py      # pytest fixtures — isolated in-memory DB per test
 │   ├── test_database.py # 40 tests — CRUD, atomic orders, rollback, CASCADE
-│   └── test_auth.py     # 33 tests — hashing, validators, rate limiting
+│   ├── test_auth.py     # 33 tests — hashing, validators, rate limiting
+│   ├── test_phase3.py   # 8 tests — clinical statuses, contraindications, refills
+│   └── test_phase4.py   # 4 tests — PG wrapper, audit logs, auto-user detection
 │
 ├── .streamlit/
 │   ├── config.toml           # Premium medical-blue color theme
@@ -139,7 +151,7 @@ Pharmacy_Management_System/
 │   └── workflows/ci.yml      # Run pytest on every push / PR to main
 │
 ├── Dockerfile               # Slim Python 3.11, non-root user, health check
-├── docker-compose.yml       # One-command deploy with persistent volumes
+├── docker-compose.yml       # One-command deploy with PostgreSQL database
 ├── requirements.txt
 ├── pytest.ini
 └── .env.example             # All supported environment variables
@@ -192,15 +204,17 @@ streamlit run main.py
 ## 🧪 Tests
 
 ```bash
-python -m pytest tests/ -v
+$env:PYTHONPATH="." ; python -m pytest
 ```
 
-**73 tests · ~2.5 s · in-memory SQLite · no server required**
+**85 tests · ~2.5 s · in-memory SQLite · no server required**
 
 | Test File | Count | What's Covered |
 |---|---|---|
 | `test_database.py` | 40 | CRUD, atomic orders, rollback, CASCADE delete, low-stock, bulk import, constraint violations |
 | `test_auth.py` | 33 | PBKDF2 hashing, strength validation, email/phone regex, rate limiting, admin auth |
+| `test_phase3.py` | 8 | Order lifecycle state transitions, category contraindication checks, and refill age validations |
+| `test_phase4.py` | 4 | PostgreSQL query param translation, auto-resolving active user sessions, and atomic audit logging |
 
 CI runs automatically on every push and PR via [GitHub Actions](https://github.com/HimanshuSh31/Pharmacy_Management_System/actions).
 
@@ -215,13 +229,17 @@ Drugs      (D_id PK · D_Name · D_ExpDate · D_Use
             D_Qty CHECK(>=0) · D_Price · D_Image
             D_Category · D_Supplier · D_Prescription)
 
-Orders     (O_id PK · O_Name · O_Timestamp
-            C_Email FK → Customers)
+Orders     (O_id PK · O_Name · O_Timestamp · C_Email FK → Customers
+            O_Status · O_Prescription_Path · O_Rejection_Reason)
 
-OrderItems (OI_id PK AUTOINCREMENT
+OrderItems (OI_id PK (SERIAL / AUTOINCREMENT)
             O_id FK → Orders ON DELETE CASCADE
             D_id FK → Drugs
             D_name · quantity CHECK(>0) · unit_price)
+
+Contraindications (CI_id PK · Category_A · Category_B · Severity · Warning_Message)
+
+AuditLogs  (AL_id PK · AL_Timestamp · AL_User · AL_Action · AL_Details)
 ```
 
 ---

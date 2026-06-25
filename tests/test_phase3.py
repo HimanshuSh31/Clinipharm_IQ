@@ -120,3 +120,69 @@ def test_order_status_transitions(setup_test_data):
     rows = order_view_data("alice@test.com")
     assert rows[0][5] == "Cancelled"
     assert rows[0][7] == "Prescription name does not match patient"
+
+
+def test_order_get_helpers(setup_test_data):
+    """Verify order_get_items and order_get_header return accurate details."""
+    from database import order_get_items, order_get_header
+    order_id = "ORD-HELPERS"
+    items = [
+        {"drug_id": "#MTV", "drug_name": "Multivitamins", "quantity": 3, "unit_price": 8.0},
+        {"drug_id": "#ASP", "drug_name": "Aspirin", "quantity": 1, "unit_price": 5.0}
+    ]
+    order_place("alice@test.com", order_id, items)
+
+    # Test order_get_items
+    retrieved_items = order_get_items(order_id)
+    assert len(retrieved_items) == 2
+    assert retrieved_items[0]["drug_id"] == "#MTV"
+    assert retrieved_items[0]["quantity"] == 3
+    assert retrieved_items[1]["drug_id"] == "#ASP"
+    assert retrieved_items[1]["quantity"] == 1
+
+    # Test order_get_header
+    header = order_get_header(order_id)
+    assert header is not None
+    # Columns: (O_id, O_Name, O_Timestamp, C_Email, O_Status, O_Prescription_Path, O_Rejection_Reason)
+    assert header[0] == order_id
+    assert header[1] == "Alice"
+    assert header[3] == "alice@test.com"
+    assert header[4] == "Preparing"
+    assert header[5] is None
+
+
+def test_refill_prescription_age_validation(setup_test_data):
+    """Verify the prescription age validation logic based on timestamp age."""
+    from datetime import datetime, date, timedelta
+    from database import order_get_header
+    
+    order_id = "ORD-AGE"
+    items = [
+        {"drug_id": "#AMX", "drug_name": "Amoxicillin", "quantity": 1, "unit_price": 15.0}
+    ]
+    rx_path = "images/prescriptions/ORD-AGE_prescription.png"
+    order_place("alice@test.com", order_id, items, rx_path)
+
+    # Test Case 1: Within 90 days (should be valid)
+    header = order_get_header(order_id)
+    timestamp_str = header[2]  # O_Timestamp
+    
+    date_str = timestamp_str.split(" ")[0]
+    order_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+    days_old = (date.today() - order_date).days
+    assert days_old <= 90  # Freshly placed
+    
+    # Test Case 2: Manually simulate an expired order (100 days old)
+    # We update the O_Timestamp in the database to be 100 days ago
+    conn = database.get_connection()
+    expired_date = (date.today() - timedelta(days=100)).strftime("%Y-%m-%d %H:%M:%S")
+    conn.execute("UPDATE Orders SET O_Timestamp = ? WHERE O_id = ?", (expired_date, order_id))
+    conn.commit()
+
+    # Re-fetch and check
+    header_expired = order_get_header(order_id)
+    timestamp_expired_str = header_expired[2]
+    date_expired_str = timestamp_expired_str.split(" ")[0]
+    order_expired_date = datetime.strptime(date_expired_str, "%Y-%m-%d").date()
+    days_expired_old = (date.today() - order_expired_date).days
+    assert days_expired_old > 90  # Successfully expired

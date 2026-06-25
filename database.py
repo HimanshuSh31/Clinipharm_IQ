@@ -757,3 +757,39 @@ def order_delete(order_id: str) -> bool:
         conn.rollback()
         logger.error("order_delete failed: %s", exc)
         return False
+
+
+def order_get_items(order_id: str) -> List[dict]:
+    """
+    Return all items associated with a given order_id.
+    Each item is a dict with keys: drug_id, drug_name, quantity, unit_price.
+    """
+    c = get_connection().cursor()
+    c.execute(
+        "SELECT D_id, D_name, quantity, unit_price FROM OrderItems WHERE O_id = ?",
+        (order_id,)
+    )
+    rows = c.fetchall()
+    return [
+        {
+            "drug_id": r[0],
+            "drug_name": r[1],
+            "quantity": r[2],
+            "unit_price": r[3]
+        }
+        for r in rows
+    ]
+
+
+def order_get_header(order_id: str) -> Optional[Tuple]:
+    """
+    Return the header row for a given order_id, or None if not found.
+    Columns: (O_id, O_Name, O_Timestamp, C_Email, O_Status, O_Prescription_Path, O_Rejection_Reason)
+    """
+    c = get_connection().cursor()
+    c.execute(
+        "SELECT O_id, O_Name, O_Timestamp, C_Email, O_Status, O_Prescription_Path, O_Rejection_Reason "
+        "FROM Orders WHERE O_id = ?",
+        (order_id,)
+    )
+    return c.fetchone()

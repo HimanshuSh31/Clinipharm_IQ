@@ -14,7 +14,7 @@ Round-4 improvements:
 import os
 import uuid
 import logging
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 
 import streamlit as st
@@ -44,6 +44,45 @@ def _save_uploaded_prescription(uploaded_file, order_id: str) -> str:
     with open(filepath, "wb") as f:
         f.write(uploaded_file.getbuffer())
     return filepath
+
+
+def _execute_refill(email: str, username: str, original_oid: str, items: list, rx_path: Optional[str], is_new_rx: bool) -> None:
+    # 1. Verify stock availability first
+    from database import get_connection, order_place
+    conn = get_connection()
+    c = conn.cursor()
+    insufficient_stock = []
+    for item in items:
+        c.execute("SELECT D_Name, D_Qty FROM Drugs WHERE D_id = ?", (item["drug_id"],))
+        drug_row = c.fetchone()
+        if drug_row:
+            drug_name, drug_stock = drug_row[0], drug_row[1]
+            if int(drug_stock) < int(item["quantity"]):
+                insufficient_stock.append(f"{drug_name} (Requested: {item['quantity']}, Available: {drug_stock})")
+        else:
+            insufficient_stock.append(f"Unknown Drug ID: {item['drug_id']}")
+
+    if insufficient_stock:
+        st.error(f"❌ Refill failed due to insufficient stock:\n" + "\n".join([f"· {msg}" for msg in insufficient_stock]))
+        return
+
+    # 2. Place the order
+    import uuid
+    new_oid = f"{username}#RF-{uuid.uuid4().hex[:6].upper()}"
+
+    saved_rx_path = rx_path
+    if is_new_rx and rx_path:
+        saved_rx_path = _save_uploaded_prescription(rx_path, new_oid)
+
+    success = order_place(email, new_oid, items, saved_rx_path)
+    if success:
+        invalidate_orders()
+        st.session_state.refill_upload_oid = None
+        st.success(f"🎉 Refill request submitted successfully! New Order ID: `{new_oid}`")
+        st.balloons()
+        st.rerun()
+    else:
+        st.error("❌ Refill placement failed. Please try again.")
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +218,67 @@ def _order_history(email: str) -> None:
                         <strong>Reason for cancellation:</strong> {rejection}
                     </div>
                     """, unsafe_allow_html=True)
+
+                # --- Refill Panel ---
+                if status not in ["Cancelled", "Pending Verification"]:
+                    refill_upload_oid = st.session_state.get("refill_upload_oid")
+                    if refill_upload_oid == oid:
+                        # Expired prescription flow
+                        st.markdown("<div style='height: 0.5rem;'></div>", unsafe_allow_html=True)
+                        st.warning("⏳ The prescription for this order has expired (older than 90 days). Please upload a new prescription to request a refill.")
+                        new_rx = st.file_uploader("Upload New Prescription (PDF, PNG, JPG, JPEG)", 
+                                                 type=["pdf", "png", "jpg", "jpeg"], 
+                                                 key=f"refill_uploader_{oid}")
+                        c_app, c_can = st.columns(2)
+                        with c_app:
+                            if st.button("Confirm Refill with New Prescription", key=f"btn_confirm_refill_{oid}", disabled=not new_rx, type="primary"):
+                                from database import order_get_items
+                                items = order_get_items(oid)
+                                _execute_refill(email, email.split("@")[0], oid, items, new_rx, is_new_rx=True)
+                        with c_can:
+                            if st.button("Cancel Refill", key=f"btn_cancel_refill_{oid}"):
+                                st.session_state.refill_upload_oid = None
+                                st.rerun()
+                    else:
+                        # Normal/Quick Refill button
+                        st.markdown("<div style='height: 0.25rem;'></div>", unsafe_allow_html=True)
+                        if st.button("🔁 Request Refill", key=f"btn_refill_{oid}"):
+                            # 1. Fetch items & header
+                            from database import order_get_items, order_get_header, get_connection
+                            items = order_get_items(oid)
+                            header = order_get_header(oid)
+                            
+                            # 2. Check if prescription required
+                            conn = get_connection()
+                            c = conn.cursor()
+                            needs_rx = False
+                            for item in items:
+                                c.execute("SELECT D_Prescription FROM Drugs WHERE D_id = ?", (item["drug_id"],))
+                                row = c.fetchone()
+                                if row and row[0]:
+                                    needs_rx = True
+                                    break
+                                    
+                            # 3. Check age of original prescription
+                            rx_expired = True
+                            if needs_rx and header:
+                                timestamp_str = header[2]
+                                original_rx_path = header[5]
+                                try:
+                                    date_str = timestamp_str.split(" ")[0]
+                                    order_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                                    days_old = (date.today() - order_date).days
+                                    if days_old <= 90 and original_rx_path:
+                                        rx_expired = False
+                                except Exception as e:
+                                    logger.error("Error parsing order timestamp: %s", e)
+                            
+                            if needs_rx and rx_expired:
+                                st.session_state.refill_upload_oid = oid
+                                st.rerun()
+                            else:
+                                original_rx = header[5] if (needs_rx and header) else None
+                                _execute_refill(email, email.split("@")[0], oid, items, original_rx, is_new_rx=False)
                 st.write("")
 
 

@@ -16,7 +16,77 @@ Round-2 improvements:
 import sqlite3
 import logging
 import threading
+import os
 from typing import List, Optional, Tuple
+
+try:
+    import psycopg2
+except ImportError:
+    psycopg2 = None
+
+
+class DbCursorWrapper:
+    def __init__(self, cursor, is_postgres: bool):
+        self._cursor = cursor
+        self._is_postgres = is_postgres
+
+    def execute(self, sql: str, params=None):
+        if self._is_postgres:
+            sql = sql.replace("?", "%s")
+        if params is None:
+            self._cursor.execute(sql)
+        else:
+            self._cursor.execute(sql, params)
+        return self
+
+    def executemany(self, sql: str, seq_of_parameters):
+        if self._is_postgres:
+            sql = sql.replace("?", "%s")
+        self._cursor.executemany(sql, seq_of_parameters)
+        return self
+
+    def fetchone(self):
+        return self._cursor.fetchone()
+
+    def fetchall(self):
+        return self._cursor.fetchall()
+
+    @property
+    def rowcount(self):
+        return self._cursor.rowcount
+
+    @property
+    def description(self):
+        return self._cursor.description
+
+    def __getattr__(self, name):
+        return getattr(self._cursor, name)
+
+
+class DbConnectionWrapper:
+    def __init__(self, conn, is_postgres: bool):
+        self._conn = conn
+        self._is_postgres = is_postgres
+
+    def cursor(self):
+        return DbCursorWrapper(self._conn.cursor(), self._is_postgres)
+
+    def execute(self, sql: str, params=None):
+        cursor = self.cursor()
+        cursor.execute(sql, params)
+        return cursor
+
+    def commit(self):
+        self._conn.commit()
+
+    def rollback(self):
+        self._conn.rollback()
+
+    def close(self):
+        self._conn.close()
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
 
 # Streamlit is only available when the app is running under `streamlit run`.
 # During pytest we import without it, and get_connection is fully patched
@@ -46,17 +116,32 @@ LOW_STOCK_THRESHOLD: int = 10   # drugs at or below this qty trigger an alert
 _local = threading.local()
 
 
-def get_connection() -> sqlite3.Connection:
+def get_connection():
     """
-    Return a thread-local SQLite connection.
-    Foreign-key enforcement is enabled and WAL mode is set on every connection.
+    Return a thread-local database connection wrapper.
+    Supports both SQLite and PostgreSQL based on DB_ENGINE environment variable.
     """
     if not hasattr(_local, "conn") or _local.conn is None:
-        conn = sqlite3.connect("drug_data.db", check_same_thread=False)
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA journal_mode = WAL")
-        _local.conn = conn
-        logger.info("Thread-local database connection established in WAL mode.")
+        db_engine = os.environ.get("DB_ENGINE", "sqlite").lower()
+        if db_engine == "postgres":
+            if psycopg2 is None:
+                raise ImportError("psycopg2-binary is required for PostgreSQL but is not installed.")
+            host = os.environ.get("DB_HOST", "localhost")
+            port = os.environ.get("DB_PORT", "5432")
+            name = os.environ.get("DB_NAME", "pharmacy_db")
+            user = os.environ.get("DB_USER", "postgres")
+            password = os.environ.get("DB_PASSWORD", "postgres")
+            raw_conn = psycopg2.connect(
+                host=host, port=port, database=name, user=user, password=password
+            )
+            _local.conn = DbConnectionWrapper(raw_conn, is_postgres=True)
+            logger.info("Thread-local PostgreSQL database connection established.")
+        else:
+            raw_conn = sqlite3.connect("drug_data.db", check_same_thread=False)
+            raw_conn.execute("PRAGMA foreign_keys = ON")
+            raw_conn.execute("PRAGMA journal_mode = WAL")
+            _local.conn = DbConnectionWrapper(raw_conn, is_postgres=False)
+            logger.info("Thread-local SQLite database connection established in WAL mode.")
     return _local.conn
 
 
@@ -70,63 +155,142 @@ def create_all_tables() -> None:
     Safe to call on every startup — existing data is never touched.
     """
     conn = get_connection()
+    is_pg = getattr(conn, "_is_postgres", False)
 
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS Customers (
-            C_Name     VARCHAR(50)  NOT NULL,
-            C_Password VARCHAR(200) NOT NULL,
-            C_Email    VARCHAR(50)  PRIMARY KEY NOT NULL,
-            C_State    VARCHAR(50)  NOT NULL,
-            C_Number   VARCHAR(50)  NOT NULL
-        )
-    ''')
+    if is_pg:
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS Customers (
+                C_Name     VARCHAR(50)  NOT NULL,
+                C_Password VARCHAR(200) NOT NULL,
+                C_Email    VARCHAR(50)  PRIMARY KEY NOT NULL,
+                C_State    VARCHAR(50)  NOT NULL,
+                C_Number   VARCHAR(50)  NOT NULL
+            )
+        ''')
 
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS Drugs (
-            D_Name         VARCHAR(50)  NOT NULL,
-            D_ExpDate      DATE         NOT NULL,
-            D_Use          VARCHAR(200) NOT NULL,
-            D_Qty          INT          NOT NULL CHECK(D_Qty >= 0),
-            D_id           VARCHAR(50)  PRIMARY KEY NOT NULL,
-            D_Price        REAL         NOT NULL DEFAULT 0.0,
-            D_Image        TEXT         DEFAULT NULL,
-            D_Category     TEXT         NOT NULL DEFAULT 'General',
-            D_Supplier     TEXT         NOT NULL DEFAULT '',
-            D_Prescription INTEGER      NOT NULL DEFAULT 0
-        )
-    ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS Drugs (
+                D_Name         VARCHAR(50)  NOT NULL,
+                D_ExpDate      DATE         NOT NULL,
+                D_Use          VARCHAR(200) NOT NULL,
+                D_Qty          INT          NOT NULL CHECK(D_Qty >= 0),
+                D_id           VARCHAR(50)  PRIMARY KEY NOT NULL,
+                D_Price        REAL         NOT NULL DEFAULT 0.0,
+                D_Image        TEXT         DEFAULT NULL,
+                D_Category     TEXT         NOT NULL DEFAULT 'General',
+                D_Supplier     TEXT         NOT NULL DEFAULT '',
+                D_Prescription INTEGER      NOT NULL DEFAULT 0
+            )
+        ''')
 
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS Orders (
-            O_id        VARCHAR(100) PRIMARY KEY NOT NULL,
-            O_Name      VARCHAR(100) NOT NULL,
-            O_Timestamp TEXT         NOT NULL DEFAULT (datetime(\'now\')),
-            C_Email     VARCHAR(50)  NOT NULL REFERENCES Customers(C_Email)
-        )
-    ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS Orders (
+                O_id        VARCHAR(100) PRIMARY KEY NOT NULL,
+                O_Name      VARCHAR(100) NOT NULL,
+                O_Timestamp VARCHAR(100) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                C_Email     VARCHAR(50)  NOT NULL REFERENCES Customers(C_Email)
+            )
+        ''')
 
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS OrderItems (
-            OI_id      INTEGER PRIMARY KEY AUTOINCREMENT,
-            O_id       VARCHAR(100) NOT NULL,
-            D_id       VARCHAR(50)  NOT NULL,
-            D_name     VARCHAR(50)  NOT NULL,
-            quantity   INT          NOT NULL CHECK(quantity > 0),
-            unit_price REAL         NOT NULL DEFAULT 0.0,
-            FOREIGN KEY (O_id) REFERENCES Orders(O_id) ON DELETE CASCADE,
-            FOREIGN KEY (D_id) REFERENCES Drugs(D_id)
-        )
-    ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS OrderItems (
+                OI_id      SERIAL PRIMARY KEY,
+                O_id       VARCHAR(100) NOT NULL,
+                D_id       VARCHAR(50)  NOT NULL,
+                D_name     VARCHAR(50)  NOT NULL,
+                quantity   INT          NOT NULL CHECK(quantity > 0),
+                unit_price REAL         NOT NULL DEFAULT 0.0,
+                FOREIGN KEY (O_id) REFERENCES Orders(O_id) ON DELETE CASCADE,
+                FOREIGN KEY (D_id) REFERENCES Drugs(D_id)
+            )
+        ''')
 
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS Contraindications (
-            CI_id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            Category_A     VARCHAR(100) NOT NULL,
-            Category_B     VARCHAR(100) NOT NULL,
-            Severity       VARCHAR(20) NOT NULL DEFAULT 'High',
-            Warning_Message TEXT NOT NULL
-        )
-    ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS Contraindications (
+                CI_id          SERIAL PRIMARY KEY,
+                Category_A     VARCHAR(100) NOT NULL,
+                Category_B     VARCHAR(100) NOT NULL,
+                Severity       VARCHAR(20) NOT NULL DEFAULT 'High',
+                Warning_Message TEXT NOT NULL
+            )
+        ''')
+
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS AuditLogs (
+                AL_id          SERIAL PRIMARY KEY,
+                AL_Timestamp   VARCHAR(100) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                AL_User        VARCHAR(100) NOT NULL,
+                AL_Action      VARCHAR(100) NOT NULL,
+                AL_Details     TEXT NOT NULL
+            )
+        ''')
+    else:
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS Customers (
+                C_Name     VARCHAR(50)  NOT NULL,
+                C_Password VARCHAR(200) NOT NULL,
+                C_Email    VARCHAR(50)  PRIMARY KEY NOT NULL,
+                C_State    VARCHAR(50)  NOT NULL,
+                C_Number   VARCHAR(50)  NOT NULL
+            )
+        ''')
+
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS Drugs (
+                D_Name         VARCHAR(50)  NOT NULL,
+                D_ExpDate      DATE         NOT NULL,
+                D_Use          VARCHAR(200) NOT NULL,
+                D_Qty          INT          NOT NULL CHECK(D_Qty >= 0),
+                D_id           VARCHAR(50)  PRIMARY KEY NOT NULL,
+                D_Price        REAL         NOT NULL DEFAULT 0.0,
+                D_Image        TEXT         DEFAULT NULL,
+                D_Category     TEXT         NOT NULL DEFAULT 'General',
+                D_Supplier     TEXT         NOT NULL DEFAULT '',
+                D_Prescription INTEGER      NOT NULL DEFAULT 0
+            )
+        ''')
+
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS Orders (
+                O_id        VARCHAR(100) PRIMARY KEY NOT NULL,
+                O_Name      VARCHAR(100) NOT NULL,
+                O_Timestamp TEXT         NOT NULL DEFAULT (datetime('now')),
+                C_Email     VARCHAR(50)  NOT NULL REFERENCES Customers(C_Email)
+            )
+        ''')
+
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS OrderItems (
+                OI_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                O_id       VARCHAR(100) NOT NULL,
+                D_id       VARCHAR(50)  NOT NULL,
+                D_name     VARCHAR(50)  NOT NULL,
+                quantity   INT          NOT NULL CHECK(quantity > 0),
+                unit_price REAL         NOT NULL DEFAULT 0.0,
+                FOREIGN KEY (O_id) REFERENCES Orders(O_id) ON DELETE CASCADE,
+                FOREIGN KEY (D_id) REFERENCES Drugs(D_id)
+            )
+        ''')
+
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS Contraindications (
+                CI_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                Category_A     VARCHAR(100) NOT NULL,
+                Category_B     VARCHAR(100) NOT NULL,
+                Severity       VARCHAR(20) NOT NULL DEFAULT 'High',
+                Warning_Message TEXT NOT NULL
+            )
+        ''')
+
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS AuditLogs (
+                AL_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                AL_Timestamp   TEXT NOT NULL DEFAULT (datetime('now')),
+                AL_User        VARCHAR(100) NOT NULL,
+                AL_Action      VARCHAR(100) NOT NULL,
+                AL_Details     TEXT NOT NULL
+            )
+        ''')
 
     conn.commit()
     _seed_contraindications(conn)
@@ -134,7 +298,7 @@ def create_all_tables() -> None:
     logger.info("All tables created/verified.")
 
 
-def _seed_contraindications(conn: sqlite3.Connection) -> None:
+def _seed_contraindications(conn) -> None:
     """Seed the database with standard drug-drug category conflicts if empty."""
     c = conn.cursor()
     c.execute("SELECT COUNT(*) FROM Contraindications")
@@ -155,51 +319,48 @@ def _seed_contraindications(conn: sqlite3.Connection) -> None:
         logger.info("Seeded default drug category contraindications.")
 
 
-def _run_migrations(conn: sqlite3.Connection) -> None:
+def _run_migrations(conn) -> None:
     """
     Add columns that were introduced after the initial schema deployment.
-    SQLite only supports ADD COLUMN, so old columns are never removed.
+    Database-agnostic using LIMIT 0 column inspection.
     """
     c = conn.cursor()
 
     # --- Drugs migrations ---
-    c.execute("PRAGMA table_info(Drugs)")
-    drug_cols = {row[1] for row in c.fetchall()}
+    c.execute("SELECT * FROM Drugs LIMIT 0")
+    drug_cols = {col[0].lower() for col in c.description}
 
-    if "D_Price" not in drug_cols:
+    if "d_price" not in drug_cols:
         conn.execute("ALTER TABLE Drugs ADD COLUMN D_Price REAL DEFAULT 0.0")
         logger.info("Migration: added D_Price to Drugs")
 
-    if "D_Image" not in drug_cols:
+    if "d_image" not in drug_cols:
         conn.execute("ALTER TABLE Drugs ADD COLUMN D_Image TEXT DEFAULT NULL")
         logger.info("Migration: added D_Image to Drugs")
 
-    if "D_Category" not in drug_cols:
+    if "d_category" not in drug_cols:
         conn.execute("ALTER TABLE Drugs ADD COLUMN D_Category TEXT DEFAULT 'General'")
         logger.info("Migration: added D_Category to Drugs")
 
-    if "D_Supplier" not in drug_cols:
+    if "d_supplier" not in drug_cols:
         conn.execute("ALTER TABLE Drugs ADD COLUMN D_Supplier TEXT DEFAULT ''")
         logger.info("Migration: added D_Supplier to Drugs")
 
-    if "D_Prescription" not in drug_cols:
+    if "d_prescription" not in drug_cols:
         conn.execute("ALTER TABLE Drugs ADD COLUMN D_Prescription INTEGER DEFAULT 0")
         logger.info("Migration: added D_Prescription to Drugs")
 
     # --- Orders migrations ---
-    c.execute("PRAGMA table_info(Orders)")
-    order_cols = {row[1] for row in c.fetchall()}
+    c.execute("SELECT * FROM Orders LIMIT 0")
+    order_cols = {col[0].lower() for col in c.description}
 
-    if "O_Timestamp" not in order_cols:
-        # SQLite ALTER TABLE does not allow non-constant expressions as DEFAULT.
-        # Use a constant empty string; new rows always supply the value explicitly.
+    if "o_timestamp" not in order_cols:
         conn.execute(
             "ALTER TABLE Orders ADD COLUMN O_Timestamp TEXT DEFAULT ''"
         )
         logger.info("Migration: added O_Timestamp to Orders")
 
-    if "C_Email" not in order_cols:
-        # SQLite ADD COLUMN supports foreign key references
+    if "c_email" not in order_cols:
         conn.execute(
             "ALTER TABLE Orders ADD COLUMN C_Email VARCHAR(50) DEFAULT NULL REFERENCES Customers(C_Email)"
         )
@@ -219,15 +380,15 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         """)
         logger.info("Migration: added C_Email to Orders and backpopulated values")
 
-    if "O_Status" not in order_cols:
+    if "o_status" not in order_cols:
         conn.execute("ALTER TABLE Orders ADD COLUMN O_Status VARCHAR(30) DEFAULT 'Preparing'")
         logger.info("Migration: added O_Status to Orders")
 
-    if "O_Prescription_Path" not in order_cols:
+    if "o_prescription_path" not in order_cols:
         conn.execute("ALTER TABLE Orders ADD COLUMN O_Prescription_Path TEXT DEFAULT NULL")
         logger.info("Migration: added O_Prescription_Path to Orders")
 
-    if "O_Rejection_Reason" not in order_cols:
+    if "o_rejection_reason" not in order_cols:
         conn.execute("ALTER TABLE Orders ADD COLUMN O_Rejection_Reason TEXT DEFAULT NULL")
         logger.info("Migration: added O_Rejection_Reason to Orders")
 
@@ -251,12 +412,11 @@ def customer_add_data(name: str, password_hash: str, email: str,
         conn.commit()
         logger.info("Customer added: %s", email)
         return True
-    except sqlite3.IntegrityError:
-        conn.rollback()
-        logger.warning("Duplicate email on signup: %s", email)
-        return False
     except Exception as exc:
         conn.rollback()
+        if "IntegrityError" in type(exc).__name__:
+            logger.warning("Duplicate email on signup: %s", email)
+            return False
         logger.error("customer_add_data failed: %s", exc)
         return False
 
@@ -313,15 +473,16 @@ def customer_delete(email: str) -> Tuple[bool, str]:
         if cur.rowcount == 0:
             logger.warning("customer_delete: no customer with email=%s", email)
             return False, "Customer not found."
+        audit_log_write("Customer Deleted", f"Deleted customer with email: {email}", commit=False)
         conn.commit()
         logger.info("Customer deleted: %s", email)
         return True, "Customer deleted successfully."
-    except sqlite3.IntegrityError as exc:
-        conn.rollback()
-        logger.warning("customer_delete integrity violation: %s", exc)
-        return False, "Cannot delete customer because they have active orders linked to their account."
     except Exception as exc:
         conn.rollback()
+        exc_name = type(exc).__name__
+        if "IntegrityError" in exc_name or "ForeignKeyViolation" in exc_name:
+            logger.warning("customer_delete integrity violation: %s", exc)
+            return False, "Cannot delete customer because they have active orders linked to their account."
         logger.error("customer_delete failed: %s", exc)
         return False, f"Database error: {str(exc)}"
 
@@ -345,15 +506,19 @@ def drug_add_data(name: str, expdate: str, use: str, qty: int, drug_id: str,
             (name, expdate, use, qty, drug_id, price, image,
              category, supplier, prescription)
         )
+        audit_log_write(
+            "Drug Added",
+            f"Added drug '{name}' (ID: {drug_id}) with category: {category}, price: {price}, qty: {qty}",
+            commit=False
+        )
         conn.commit()
         logger.info("Drug added: %s", drug_id)
         return True
-    except sqlite3.IntegrityError:
-        conn.rollback()
-        logger.warning("Duplicate drug ID: %s", drug_id)
-        return False
     except Exception as exc:
         conn.rollback()
+        if "IntegrityError" in type(exc).__name__:
+            logger.warning("Duplicate drug ID: %s", drug_id)
+            return False
         logger.error("drug_add_data failed: %s", exc)
         return False
 
@@ -384,6 +549,7 @@ def drug_update(drug_id: str, use: str) -> bool:
         if cur.rowcount == 0:
             logger.warning("drug_update: no drug with id=%s", drug_id)
             return False
+        audit_log_write("Drug Use Updated", f"Updated use description for drug ID {drug_id}", commit=False)
         conn.commit()
         logger.info("Drug updated: %s", drug_id)
         return True
@@ -402,6 +568,7 @@ def drug_update_price(drug_id: str, price: float) -> bool:
         )
         if cur.rowcount == 0:
             return False
+        audit_log_write("Drug Price Updated", f"Updated price for drug ID {drug_id} to {price}", commit=False)
         conn.commit()
         return True
     except Exception as exc:
@@ -444,15 +611,16 @@ def drug_delete(drug_id: str) -> Tuple[bool, str]:
         if cur.rowcount == 0:
             logger.warning("drug_delete: no drug with id=%s", drug_id)
             return False, "Drug not found."
+        audit_log_write("Drug Deleted", f"Deleted drug ID: {drug_id}", commit=False)
         conn.commit()
         logger.info("Drug deleted: %s", drug_id)
         return True, "Drug deleted successfully."
-    except sqlite3.IntegrityError as exc:
-        conn.rollback()
-        logger.warning("drug_delete integrity violation: %s", exc)
-        return False, "Cannot delete drug because it is present in existing customer orders. Consider setting its stock to 0 instead."
     except Exception as exc:
         conn.rollback()
+        exc_name = type(exc).__name__
+        if "IntegrityError" in exc_name or "ForeignKeyViolation" in exc_name:
+            logger.warning("drug_delete integrity violation: %s", exc)
+            return False, "Cannot delete drug because it is present in existing customer orders. Consider setting its stock to 0 instead."
         logger.error("drug_delete failed: %s", exc)
         return False, f"Database error: {str(exc)}"
 
@@ -492,6 +660,11 @@ def drug_update_details(drug_id: str, use: str, price: float, add_qty: int,
         if cur.rowcount == 0:
             logger.warning("drug_update_details: no drug with id=%s", drug_id)
             return False
+        audit_log_write(
+            "Drug Details Updated",
+            f"Updated drug ID {drug_id}: added qty {add_qty}, price {price}, category {category}",
+            commit=False
+        )
         conn.commit()
         logger.info("Drug updated: %s (added %d stock)", drug_id, add_qty)
         return True
@@ -510,6 +683,7 @@ def drug_update_expiry(drug_id: str, new_expdate: str) -> bool:
         )
         if cur.rowcount == 0:
             return False
+        audit_log_write("Drug Expiry Updated", f"Updated expiry date for drug ID {drug_id} to {new_expdate}", commit=False)
         conn.commit()
         logger.info("Drug expiry updated: %s -> %s", drug_id, new_expdate)
         return True
@@ -551,6 +725,8 @@ def drug_bulk_import(drugs: List[dict]) -> tuple:
             success += 1
         else:
             fail += 1
+    if success > 0:
+        audit_log_write("Bulk Import", f"Imported {success} drugs from CSV (failed {fail})")
     return success, fail
 
 
@@ -627,10 +803,12 @@ def order_place(customer_email: str, order_id: str,
         # Initial status: 'Pending Verification' if prescription is required, otherwise 'Preparing'
         initial_status = "Pending Verification" if requires_rx else "Preparing"
 
+        import datetime
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         conn.execute(
             "INSERT INTO Orders (O_id, O_Name, O_Timestamp, C_Email, O_Status, O_Prescription_Path) "
-            "VALUES (?, ?, datetime('now'), ?, ?, ?)",
-            (order_id, customer_name, customer_email, initial_status, prescription_path)
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (order_id, customer_name, now_str, customer_email, initial_status, prescription_path)
         )
         for item in items:
             conn.execute(
@@ -707,6 +885,11 @@ def order_update_status(order_id: str, status: str, rejection_reason: Optional[s
         if cur.rowcount == 0:
             logger.warning("order_update_status: no order with id=%s", order_id)
             return False
+        audit_log_write(
+            "Order Status Updated",
+            f"Updated order {order_id} status to '{status}'" + (f" (Reason: {rejection_reason})" if rejection_reason else ""),
+            commit=False
+        )
         conn.commit()
         logger.info("Order status updated: %s ➔ %s", order_id, status)
         return True
@@ -750,6 +933,7 @@ def order_delete(order_id: str) -> bool:
         if cur.rowcount == 0:
             logger.warning("order_delete: no order with id=%s", order_id)
             return False
+        audit_log_write("Order Deleted", f"Deleted order: {order_id}", commit=False)
         conn.commit()
         logger.info("Order deleted: %s", order_id)
         return True
@@ -793,3 +977,58 @@ def order_get_header(order_id: str) -> Optional[Tuple]:
         (order_id,)
     )
     return c.fetchone()
+
+
+def audit_log_write(action: str, details: str, user_email: Optional[str] = None, commit: bool = True) -> None:
+    """
+    Write an audit log entry. Resolves the active user from Streamlit session state
+    if not explicitly provided.
+    """
+    import datetime
+    if not user_email:
+        try:
+            import streamlit as st
+            if st and hasattr(st, "session_state") and st.session_state.get("logged_in"):
+                user_email = st.session_state.get("username") or st.session_state.get("email")
+        except Exception:
+            pass
+    if not user_email:
+        user_email = "System"
+
+    conn = get_connection()
+    try:
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        conn.execute(
+            "INSERT INTO AuditLogs (AL_Timestamp, AL_User, AL_Action, AL_Details) "
+            "VALUES (?, ?, ?, ?)",
+            (now_str, user_email, action, details)
+        )
+        if commit:
+            conn.commit()
+        logger.info("Audit log: [%s] %s by %s", action, details, user_email)
+        try:
+            from data import invalidate_audit_logs
+            invalidate_audit_logs()
+        except Exception:
+            pass
+    except Exception as e:
+        logger.error("Failed to write audit log: %s", e)
+
+
+def audit_log_view_all() -> List[Tuple]:
+    """Return all audit log rows (AL_id, AL_Timestamp, AL_User, AL_Action, AL_Details) newest first."""
+    c = get_connection().cursor()
+    c.execute('SELECT AL_id, AL_Timestamp, AL_User, AL_Action, AL_Details FROM AuditLogs ORDER BY AL_id DESC')
+    return c.fetchall()
+
+
+def analytics_get_raw_sales_data() -> List[Tuple]:
+    """Retrieve raw sales items for pandas-based analytics."""
+    c = get_connection().cursor()
+    c.execute('''
+        SELECT o.O_Timestamp, oi.quantity, oi.unit_price, oi.D_name, o.O_Status, d.D_Category
+        FROM Orders o
+        JOIN OrderItems oi ON o.O_id = oi.O_id
+        LEFT JOIN Drugs d ON oi.D_id = d.D_id
+    ''')
+    return c.fetchall()

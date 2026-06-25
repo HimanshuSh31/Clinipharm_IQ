@@ -1,4 +1,22 @@
 services:
+  db:
+    image: postgres:15-alpine
+    container_name: pharmadb
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: pharmacy_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d pharmacy_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   pharmacy:
     build: .
     container_name: pharmasystem
@@ -10,6 +28,9 @@ services:
       - ./images:/app/images
     env_file:
       - .env
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
@@ -17,3 +38,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
+
+volumes:
+  pgdata:

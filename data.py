@@ -21,6 +21,8 @@ from database import (
     customer_view_all_data   as _customer_view_all,
     order_view_all_data      as _order_view_all,
     order_view_data          as _order_view_data,
+    audit_log_view_all       as _audit_log_view_all,
+    analytics_get_raw_sales_data as _analytics_sales_data,
 )
 
 
@@ -64,6 +66,18 @@ def get_customer_orders(email: str):
     return _order_view_data(email)
 
 
+@st.cache_data(ttl=10, show_spinner=False)
+def get_all_audit_logs():
+    """Return all audit log rows (AL_id, AL_Timestamp, AL_User, AL_Action, AL_Details). Cached 10 s."""
+    return _audit_log_view_all()
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def get_analytics_sales_data():
+    """Return raw sales items for analytics. Cached 30 s."""
+    return _analytics_sales_data()
+
+
 # ---------------------------------------------------------------------------
 # Cache invalidators — call after any write to ensure fresh data on next render
 # ---------------------------------------------------------------------------
@@ -82,3 +96,8 @@ def invalidate_orders():
     get_all_orders.clear()
     # customer-specific order caches are keyed by email — clear all
     get_customer_orders.clear()
+    get_analytics_sales_data.clear()
+
+
+def invalidate_audit_logs():
+    get_all_audit_logs.clear()

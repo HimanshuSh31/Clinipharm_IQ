@@ -32,6 +32,7 @@ from data import (
     get_all_drugs, get_low_stock_drugs, get_drug_categories,
     get_all_customers, get_all_orders,
     invalidate_drugs, invalidate_customers, invalidate_orders,
+    get_all_audit_logs, get_analytics_sales_data,
 )
 from data import get_all_drugs
 from notifier import is_smtp_configured, send_low_stock_alert
@@ -126,18 +127,25 @@ def show_admin_dashboard() -> None:
                     )
 
     sidebar_section_label("Navigation")
-    section = st.sidebar.selectbox("Section", ["Drugs", "Customers", "Orders", "About"],
+    section = st.sidebar.selectbox("Section", ["Drugs", "Customers", "Orders", "Analytics", "Audit Logs", "About"],
                                    label_visibility="collapsed")
-    sidebar_section_label("Actions")
-    action  = st.sidebar.selectbox("Action", ["View", "Add", "Update", "Delete", "Import"],
-                                   label_visibility="collapsed")
+    
+    action = None
+    if section in ["Drugs", "Customers"]:
+        sidebar_section_label("Actions")
+        action = st.sidebar.selectbox("Action", ["View", "Add", "Update", "Delete", "Import"],
+                                       label_visibility="collapsed")
 
     if section == "Drugs":
-        _drugs_section(action)
+        _drugs_section(action or "View")
     elif section == "Customers":
-        _customers_section(action)
+        _customers_section(action or "View")
     elif section == "Orders":
         _orders_section()
+    elif section == "Analytics":
+        _analytics_section()
+    elif section == "Audit Logs":
+        _audit_logs_section()
     elif section == "About":
         _about_section()
 
@@ -599,12 +607,12 @@ def _orders_section() -> None:
             st.rerun()
         else:
             alert_danger("Not Found", f"No order with ID **{order_id_del}**.")
-
-
+ 
+ 
 # ---------------------------------------------------------------------------
 # About
 # ---------------------------------------------------------------------------
-
+ 
 def _about_section() -> None:
     section_header("ℹ️", "About")
     st.markdown("""
@@ -616,7 +624,7 @@ def _about_section() -> None:
         <table style="width:100%;border-collapse:collapse;font-size:0.875rem;">
             <tr style="border-bottom:1px solid rgba(128, 128, 128, 0.15);">
                 <td style="padding:0.6rem 0.5rem;color:var(--text-color);opacity:0.7;font-weight:600;width:35%;">Stack</td>
-                <td style="padding:0.6rem 0.5rem;color:var(--text-color);">Python · Streamlit · SQLite · Pandas</td>
+                <td style="padding:0.6rem 0.5rem;color:var(--text-color);">Python · Streamlit · SQLite / PostgreSQL · Pandas</td>
             </tr>
             <tr style="border-bottom:1px solid rgba(128, 128, 128, 0.15);">
                 <td style="padding:0.6rem 0.5rem;color:var(--text-color);opacity:0.7;font-weight:600;">Security</td>
@@ -632,8 +640,141 @@ def _about_section() -> None:
             </tr>
             <tr>
                 <td style="padding:0.6rem 0.5rem;color:var(--text-color);opacity:0.7;font-weight:600;">Testing</td>
-                <td style="padding:0.6rem 0.5rem;color:var(--text-color);">73 pytest tests · GitHub Actions CI on every push</td>
+                <td style="padding:0.6rem 0.5rem;color:var(--text-color);">81+ pytest tests · GitHub Actions CI on every push</td>
             </tr>
         </table>
     </div>
     """, unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------------------
+# Analytics & Audit Logs (Phase 4)
+# ---------------------------------------------------------------------------
+
+def _analytics_section() -> None:
+    section_header("📊", "Interactive Business Analytics")
+    
+    sales_data = get_analytics_sales_data()
+    drugs = get_all_drugs()
+    
+    if not sales_data:
+        alert_warning("No sales data available", "Analytics will populate as customers place orders.")
+        return
+        
+    df_sales = pd.DataFrame(sales_data, columns=["Timestamp", "Quantity", "UnitPrice", "DrugName", "Status", "Category"])
+    df_sales["Revenue"] = df_sales["Quantity"] * df_sales["UnitPrice"]
+    
+    # 1. KPI cards
+    df_completed = df_sales[~df_sales["Status"].isin(["Cancelled", "Pending Verification"])]
+    total_revenue = df_completed["Revenue"].sum()
+    total_qty_sold = df_completed["Quantity"].sum()
+    
+    df_drugs = pd.DataFrame(drugs, columns=["Name", "ExpDate", "Use", "Qty", "ID", "Price", "Image", "Category", "Supplier", "Prescription"])
+    df_drugs["Value"] = df_drugs["Qty"] * df_drugs["Price"]
+    total_inventory_value = df_drugs["Value"].sum()
+    
+    st.markdown("### Operational KPIs")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric(label="Total Revenue", value=f"₹{total_revenue:,.2f}")
+    with col2:
+        st.metric(label="Units Dispensed", value=f"{total_qty_sold:,}")
+    with col3:
+        st.metric(label="Total Inventory Valuation", value=f"₹{total_inventory_value:,.2f}")
+        
+    st.markdown("<hr style='margin:1.5rem 0; opacity:0.15;'>", unsafe_allow_html=True)
+    
+    # 2. Charts grid
+    chart_col1, chart_col2 = st.columns(2)
+    
+    with chart_col1:
+        st.markdown("#### 📈 Cumulative Revenue Trend")
+        if not df_completed.empty:
+            df_completed["Date"] = pd.to_datetime(df_completed["Timestamp"]).dt.date
+            daily_rev = df_completed.groupby("Date")["Revenue"].sum().reset_index().sort_values("Date")
+            daily_rev["Cumulative Revenue"] = daily_rev["Revenue"].cumsum()
+            daily_rev_chart = daily_rev.set_index("Date")["Cumulative Revenue"]
+            st.area_chart(daily_rev_chart)
+        else:
+            st.info("No completed sales to plot revenue trend.")
+            
+    with chart_col2:
+        st.markdown("#### 📦 Order Fulfillment Status")
+        status_dist = df_sales.groupby("Status").size().reset_index(name="Count")
+        status_chart = status_dist.set_index("Status")["Count"]
+        st.bar_chart(status_chart)
+        
+    chart_col3, chart_col4 = st.columns(2)
+    
+    with chart_col3:
+        st.markdown("#### 🏆 Top 10 Best-Selling Medicines")
+        if not df_completed.empty:
+            top_drugs = df_completed.groupby("DrugName")["Quantity"].sum().reset_index()
+            top_drugs = top_drugs.sort_values("Quantity", ascending=False).head(10)
+            top_drugs_chart = top_drugs.set_index("DrugName")["Quantity"]
+            st.bar_chart(top_drugs_chart)
+        else:
+            st.info("No sales to show top-selling medicines.")
+            
+    with chart_col4:
+        st.markdown("#### 💊 Inventory Value by Category")
+        if not df_drugs.empty:
+            cat_val = df_drugs.groupby("Category")["Value"].sum().reset_index().sort_values("Value", ascending=False)
+            cat_val_chart = cat_val.set_index("Category")["Value"]
+            st.bar_chart(cat_val_chart)
+        else:
+            st.info("No inventory to show category valuation.")
+
+
+def _audit_logs_section() -> None:
+    section_header("📋", "Regulatory Audit Logs")
+    st.markdown("<p style='opacity:0.7;font-size:0.9rem;margin-top:-0.5rem;'>Read-only system log of all administrative actions for regulatory compliance.</p>", unsafe_allow_html=True)
+    
+    logs = get_all_audit_logs()
+    if not logs:
+        alert_warning("No audit logs recorded yet.", "System actions will be logged here.")
+        return
+        
+    df_logs = pd.DataFrame(logs, columns=["Log ID", "Timestamp", "User", "Action", "Details"])
+    
+    # Search input
+    search_query = st.text_input("🔍 Search Logs", placeholder="Search by user, action, or details...")
+    if search_query:
+        df_logs = df_logs[
+            df_logs["User"].str.contains(search_query, case=False, na=False) |
+            df_logs["Action"].str.contains(search_query, case=False, na=False) |
+            df_logs["Details"].str.contains(search_query, case=False, na=False)
+        ]
+        
+    # Dropdown filters side-by-side
+    col1, col2 = st.columns(2)
+    with col1:
+        unique_actions = ["All"] + sorted(df_logs["Action"].unique().tolist())
+        selected_action = st.selectbox("Filter by Action", unique_actions)
+    with col2:
+        unique_users = ["All"] + sorted(df_logs["User"].unique().tolist())
+        selected_user = st.selectbox("Filter by User", unique_users)
+        
+    if selected_action != "All":
+        df_logs = df_logs[df_logs["Action"] == selected_action]
+    if selected_user != "All":
+        df_logs = df_logs[df_logs["User"] == selected_user]
+        
+    st.markdown(f"**Showing {len(df_logs)} matching log entry/entries**")
+    
+    # Custom table rendering
+    st.dataframe(
+        df_logs.sort_values("Log ID", ascending=False),
+        use_container_width=True,
+        hide_index=True
+    )
+    
+    # CSV export
+    csv_data = df_logs.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        label="📥 Export Audit Logs (CSV)",
+        data=csv_data,
+        file_name="pharmacy_audit_logs.csv",
+        mime="text/csv",
+        use_container_width=True
+    )

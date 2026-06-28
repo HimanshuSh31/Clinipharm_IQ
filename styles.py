@@ -220,7 +220,7 @@ def sidebar_logo(role: str = "Admin Portal") -> None:
     ">
         <div style="font-size:2.4rem; margin-bottom:0.4rem;">💊</div>
         <div style="font-size:1rem; font-weight:800; color:#F1F5F9; letter-spacing:0.02em;">
-            PharmaSystem
+            Clinipharm IQ
         </div>
         <div style="font-size:0.68rem; color:#475569; text-transform:uppercase;
                     letter-spacing:0.1em; margin-top:0.2rem;">
@@ -366,58 +366,58 @@ def medicine_card_header(name: str, use: str, price: float,
     stock_text = f"{qty} in stock" if stock_ok else f"Low stock ({qty})"
 
     st.markdown(f"""
-    <div style="
-        background:var(--secondary-background-color); border-radius:16px;
-        padding:1.25rem; margin-bottom:0.25rem;
-        box-shadow:0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.06);
-        border:1px solid rgba(128, 128, 128, 0.15);
-        border-top: 3px solid {'#10B981' if stock_ok else '#EF4444'};
-        transition:transform 0.2s,box-shadow 0.2s;
-    ">
-        <div style="display:flex; align-items:center; gap:0.9rem; margin-bottom:0.9rem;">
-            <div style="
-                width:56px; height:56px; border-radius:12px;
-                background:rgba(37, 99, 235, 0.08);
-                display:flex; align-items:center; justify-content:center;
-                font-size:1.9rem; flex-shrink:0;
-            ">💊</div>
-            <div style="flex:1; min-width:0;">
-                <div style="font-size:1rem; font-weight:700; color:var(--text-color);
-                            white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
-                    {name}
-                </div>
-                <div style="font-size:0.78rem; color:var(--text-color); opacity:0.7; line-height:1.4;
-                            margin-top:0.15rem; display:-webkit-box;
-                            -webkit-line-clamp:2; -webkit-box-orient:vertical;
-                            overflow:hidden;">
-                    {use}
-                </div>
+<div style="
+    background:var(--secondary-background-color); border-radius:16px;
+    padding:1.25rem; margin-bottom:0.25rem;
+    box-shadow:0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.06);
+    border:1px solid rgba(128, 128, 128, 0.15);
+    border-top: 3px solid {'#10B981' if stock_ok else '#EF4444'};
+    transition:transform 0.2s,box-shadow 0.2s;
+">
+    <div style="display:flex; align-items:center; gap:0.9rem; margin-bottom:0.9rem;">
+        <div style="
+            width:56px; height:56px; border-radius:12px;
+            background:rgba(37, 99, 235, 0.08);
+            display:flex; align-items:center; justify-content:center;
+            font-size:1.9rem; flex-shrink:0;
+        ">💊</div>
+        <div style="flex:1; min-width:0;">
+            <div style="font-size:1rem; font-weight:700; color:var(--text-color);
+                        white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                {name}
+            </div>
+            <div style="font-size:0.78rem; color:var(--text-color); opacity:0.7; line-height:1.4;
+                        margin-top:0.15rem; display:-webkit-box;
+                        -webkit-line-clamp:2; -webkit-box-orient:vertical;
+                        overflow:hidden;">
+                {use}
             </div>
         </div>
-
-        <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;
-                    margin-bottom:0.5rem;">
-            <span style="
-                display:inline-block;
-                background:linear-gradient(135deg,#2563EB,#1D4ED8);
-                color:white; font-weight:700; font-size:0.95rem;
-                padding:0.28rem 0.8rem; border-radius:8px;">
-                ₹ {float(price):.2f}
-            </span>
-            <span style="
-                display:inline-flex; align-items:center; gap:0.25rem;
-                background:{stock_bg}; color:{stock_col};
-                font-size:0.74rem; font-weight:700;
-                padding:0.28rem 0.65rem; border-radius:20px;">
-                {stock_icon} {stock_text}
-            </span>
-        </div>
-
-        <div style="font-size:0.74rem; color:var(--text-color); opacity:0.5; font-weight:500;">
-            ⏳ Expires: {expiry}
-        </div>
     </div>
-    """, unsafe_allow_html=True)
+
+    <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;
+                margin-bottom:0.5rem;">
+        <span style="
+            display:inline-block;
+            background:linear-gradient(135deg,#2563EB,#1D4ED8);
+            color:white; font-weight:700; font-size:0.95rem;
+            padding:0.28rem 0.8rem; border-radius:8px;">
+            ₹ {float(price):.2f}
+        </span>
+        <span style="
+            display:inline-flex; align-items:center; gap:0.25rem;
+            background:{stock_bg}; color:{stock_col};
+            font-size:0.74rem; font-weight:700;
+            padding:0.28rem 0.65rem; border-radius:20px;">
+            {stock_icon} {stock_text}
+        </span>
+    </div>
+
+    <div style="font-size:0.74rem; color:var(--text-color); opacity:0.5; font-weight:500;">
+        ⏳ Expires: {expiry}
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
